@@ -1,19 +1,18 @@
 #ifndef GAZEBO_ROS_ACTOR_PLUGIN_INCLUDE_GAZEBO_ROS_ACTOR_COMMAND
 #define GAZEBO_ROS_ACTOR_PLUGIN_INCLUDE_GAZEBO_ROS_ACTOR_COMMAND
 
-#include <ros/ros.h>
-#include <ros/callback_queue.h>
-#include <geometry_msgs/Twist.h>
-#include <nav_msgs/Path.h>
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/path.hpp>
 
 #include <string>
 #include <queue>
 #include <vector>
+#include <thread>
 
 #include "gazebo/common/Plugin.hh"
 #include "gazebo/physics/physics.hh"
 #include "gazebo/util/system.hh"
-
 namespace gazebo {
 
 /// \brief Gazebo plugin for commanding an actor to follow
@@ -30,19 +29,19 @@ class GazeboRosActorCommand : public ModelPlugin {
   /// \brief Load the actor plugin.
   /// \param[in] _model Pointer to the parent model.
   /// \param[in] _sdf Pointer to the plugin's SDF elements.
-  virtual void Load(physics::ModelPtr _model, sdf::ElementPtr _sdf);
+  virtual void Load(gazebo::physics::ModelPtr _model, sdf::ElementPtr _sdf) override;
 
   // \brief Reset the plugin.
-  virtual void Reset();
+  virtual void Reset() override;
 
  private:
   /// \brief Callback function for receiving velocity commands from a publisher.
   /// \param[in] _model Pointer to the incoming velocity message.
-  void VelCallback(const geometry_msgs::Twist::ConstPtr &msg);
+  void VelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
 
   /// \brief Callback function for receiving path commands from a publisher.
   /// \param[in] _model Pointer to the incoming path message.
-  void PathCallback(const nav_msgs::Path::ConstPtr &msg);
+  void PathCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
 
   /// \brief Function that is called every update cycle.
   /// \param[in] _info Timing information.
@@ -55,15 +54,15 @@ class GazeboRosActorCommand : public ModelPlugin {
   void PathQueueThread();
 
   /// \brief ROS node handle.
-  ros::NodeHandle *ros_node_;
+  rclcpp::Node::SharedPtr ros_node_;
 
   /// \brief Subscribers for velocity and path commands.
-  ros::Subscriber vel_sub_;
-  ros::Subscriber path_sub_;
+rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr vel_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
 
   /// \brief Custom callback queues for velocity and path commands.
-  ros::CallbackQueue vel_queue_;
-  ros::CallbackQueue path_queue_;
+  rclcpp::CallbackQueue vel_queue_;
+  rclcpp::CallbackQueue path_queue_;
 
   /// \brief Custom callback queue threads for velocity and path commands.
   boost::thread velCallbackQueueThread_;

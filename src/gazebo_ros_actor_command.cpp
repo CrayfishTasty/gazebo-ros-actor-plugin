@@ -1,12 +1,18 @@
 #include <gazebo_ros_actor_plugin/gazebo_ros_actor_command.h>
+#include <geometry_msgs/msg/quaternion.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
 
 #include <cmath>
 #include <functional>
+#include <memory>
 
 #include "gazebo/physics/physics.hh"
 #include <ignition/math.hh>
+#include <rclcpp/rclcpp.hpp>
+#include "std_msgs/msg/string.hpp"
 
 using namespace gazebo;
 
@@ -15,25 +21,27 @@ using namespace gazebo;
 
 /////////////////////////////////////////////////
 GazeboRosActorCommand::GazeboRosActorCommand() {
+   node = rclcpp::Node::make_shared("gazebo_ros_actor_command");
+  
+}
+
+int main(int argc, char **argv) {
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared("gazebo_ros_actor_command");
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    return 0;
 }
 
 GazeboRosActorCommand::~GazeboRosActorCommand() {
-  this->vel_queue_.clear();
-  this->vel_queue_.disable();
-  this->velCallbackQueueThread_.join();
-
-  // Added for path
-  this->path_queue_.clear();
-  this->path_queue_.disable();
-  this->pathCallbackQueueThread_.join();
-
-  this->ros_node_->shutdown();
-  delete this->ros_node_;
+vel_sub_.reset();
+path_sub_.reset();
 }
 
 /////////////////////////////////////////////////
 void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf) {
   // Set default values for parameters
+  node = rclcpp::Node::make_shared("gazebo_ros_actor_command");
   this->follow_mode_ = "velocity";
   this->vel_topic_ = "/cmd_vel";
   this->path_topic_ = "/cmd_path";
@@ -71,15 +79,22 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   if (_sdf->HasElement("default_rotation")) {
     this->default_rotation_ = _sdf->Get<double>("default_rotation");
   }
+
+//create a node
+  node = rclcpp::Node::make_shared("gazebo_ros_actor_command");
   
 
   // Check if ROS node for Gazebo has been initialized
-  if (!ros::isInitialized()) {
+   /* if (!rclcpp::isInitialized()) {
     ROS_FATAL_STREAM_NAMED("actor", "A ROS node for Gazebo has not been "
     << "initialized, unable to load plugin. Load the Gazebo system plugin "
     << "'libgazebo_ros_api_plugin.so' in the gazebo_ros package)");
     return;
-  }
+  } */
+if (!node) {
+    RCLCPP_FATAL(node->get_logger(), "A ROS node for Gazebo has not been initialized, unable to load plugin.");
+    return;
+} 
 
   // Set variables
   this->sdf_ = _sdf;
@@ -87,35 +102,33 @@ void GazeboRosActorCommand::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf)
   this->world_ = this->actor_->GetWorld();
   this->Reset();
   // Create ROS node handle
-  this->ros_node_ = new ros::NodeHandle();
-
+  //this->ros_node_ = new ros::NodeHandle();
+  //rclcpp::init(argc, argv);
+  //auto node = rclcpp::Node::make_shared("gazebo_ros_actor_command");
+  
   // Subscribe to the velocity commands
-  ros::SubscribeOptions vel_so =
-    ros::SubscribeOptions::create<geometry_msgs::Twist>(
-      vel_topic_,
-      1,
-      boost::bind(&GazeboRosActorCommand::VelCallback, this, _1),
-      ros::VoidPtr(),
-      &vel_queue_);
-  this->vel_sub_ = ros_node_->subscribe(vel_so);
+  vel_sub = node->create_subscription<geometry_msgs::msg::Twist>(
+  vel_topic_,
+  1,
+  std::bind(&GazeboRosActorCommand::VelCallback, this, std::placeholders::_1));
 
   // Create a thread for the velocity callback queue
-  this->velCallbackQueueThread_ =
-      boost::thread(boost::bind(&GazeboRosActorCommand::VelQueueThread, this));
+  //this->velCallbackQueueThread_ =
+      //boost::thread(boost::bind(&GazeboRosActorCommand::VelQueueThread, this));
+auto vel_callback_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+rclcpp::SubscriptionOptions vel_sub_options;
+vel_sub_options.callback_group = vel_callback_group;
 
   // Subscribe to the path commands
-  ros::SubscribeOptions path_so =
-    ros::SubscribeOptions::create<nav_msgs::Path>(
-        path_topic_,
-        1,
-        boost::bind(&GazeboRosActorCommand::PathCallback, this, _1),
-        ros::VoidPtr(),
-        &path_queue_);
-  this->path_sub_ = ros_node_->subscribe(path_so);
+ path_sub = node->create_subscription<nav_msgs::msg::Path>(
+  path_topic_,
+  1,
+  std::bind(&GazeboRosActorCommand::PathCallback, this, std::placeholders::_1));
 
   // Create a thread for the path callback queue
-  this->pathCallbackQueueThread_ =
-      boost::thread(boost::bind(&GazeboRosActorCommand::PathQueueThread, this));
+auto path_callback_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+rclcpp::SubscriptionOptions path_sub_options;
+path_sub_options.callback_group = path_callback_group;
 
   // Connect the OnUpdate function to the WorldUpdateBegin event.
   this->connections_.push_back(event::Events::ConnectWorldUpdateBegin(
@@ -147,14 +160,14 @@ void GazeboRosActorCommand::Reset() {
   }
 }
 
-void GazeboRosActorCommand::VelCallback(const geometry_msgs::Twist::ConstPtr &msg) {
+void GazeboRosActorCommand::VelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
   ignition::math::Vector3d vel_cmd;
   vel_cmd.X() = msg->linear.x;
   vel_cmd.Z() = msg->angular.z;
   this->cmd_queue_.push(vel_cmd);
 }
 
-void GazeboRosActorCommand::PathCallback(const nav_msgs::Path::ConstPtr &msg) {
+void GazeboRosActorCommand::PathCallback(const nav_msgs::msg::Path::SharedPtr msg) {
   // Extract the poses from the Path message
   const std::vector<geometry_msgs::PoseStamped>& poses = msg->poses;
 
@@ -273,14 +286,14 @@ void GazeboRosActorCommand::VelQueueThread() {
   static const double timeout = 0.01;
 
   while (this->ros_node_->ok())
-    this->vel_queue_.callAvailable(ros::WallDuration(timeout));
+    this->vel_queue_.callAvailable(rclcpp::Duration(timeout));
 }
 
 void GazeboRosActorCommand::PathQueueThread() {
   static const double timeout = 0.01;
 
   while (this->ros_node_->ok())
-    this->path_queue_.callAvailable(ros::WallDuration(timeout));
-}
+    this->path_queue_.callAvailable(rclcpp::Duration(timeout));
+} 
 
 GZ_REGISTER_MODEL_PLUGIN(GazeboRosActorCommand)
